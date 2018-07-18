@@ -1,0 +1,134 @@
+\documentclass[a4paper,8pt]{article}
+\usepackage{graphicx,fancyvrb,comment,url,pgffor,hyperref}
+\DefineVerbatimEnvironment{R}{Verbatim}{fontsize=\small}
+\DefineVerbatimEnvironment{Rs}{Verbatim}{fontsize=\footnotesize}
+\newcommand{\code}[1]{{\small\texttt{#1}}}
+\excludecomment{hide}
+\hypersetup{
+    colorlinks,
+    citecolor=black,
+    filecolor=black,
+    linkcolor=black,
+    urlcolor=black
+}
+\topmargin 0in
+\headheight 0in
+\headsep 0in
+\oddsidemargin 0in
+\evensidemargin 0in
+\textwidth 6.75in
+\textheight 9.5in
+
+\begin{document}
+\title{Title}
+\author{Necla Kochan} %G\"{o}knur}
+\date{05 July 2016}
+\maketitle
+\tableofcontents
+
+\section{Background}
+This CRISPR data of MCL-1 was received from James Whittle (Breast cancer Laboratory, Stem Cells and Cancer Division) by G\"{o}knur Giner on 26th of May 2016. First aim of the experiment is to determine if there are novel regulators of resistance in the human HER2 enriched breast cancer cell line SKBR3 to a new MCL1-inhibitor. 
+Bla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaaBla bla blaaa
+\label{background}
+\begin{center}
+%\includegraphics[width=0.5\textwidth]{figures/MCL1.pdf}
+%\end{center}
+%\caption{Boxplot of MCL1 expression. Log10 expression values of MCL1 gene across breast cancer subtypes is shown in the figure. MCL1 is overexpressed in basal-like(triple negative) as well as HER2 enriched breast cancer subtypes comparing to ER subtype.}
+%\end{figure}
+
+\section{Processing the Data}
+\subsection{Load the target file}
+The target file contains all the experimental information regarding to each sample included in the study. 
+<<load target, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+rm(list=ls()); options(digits=3, width=110)
+library(edgeR); library(limma); library(plyr); library(xlsx)
+setwd("C:/Users/giner.g.WEHI/BitBucket/jwhittle-crispr-mcl1")
+Targets <- read.table("Target.txt", header = TRUE)
+Targets$Treatment <- strsplit2(Targets$sampleName,"_")[,1]
+Targets$Treatment[Targets$Treatment == "845"] <- "MCL1"
+Targets$sampleGroup <- strsplit2(Targets$sampleName,"_")[,2]
+Targets <- Targets[order(Targets$sampleNo),]
+rownames(Targets) <- 1:54
+dim(Targets)
+Targets
+@
+  
+\subsection{Read the Barcodes}
+Barcode matrix shows how each pair of forward and reverse barcodes uniquely identify each sample.
+<<barcode matrix, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+barcode.matrix <- as.matrix(read.table("barcodes.txt", 
+  row.names = 1, sep = "\t", header = TRUE))
+barcode.matrix
+@
+W and the empty cells in the barcode matrix will not be included in this experiment. They will be removed later.
+Barcode matrix is then decomposed into three columns, which show sample ids, forward barcodes and reverse barcodes.
+
+\subsection{Creating Digital Gene Expression (DGE) List Object}
+A digital gene expression (DGE) list object is created for the counts data.
+This list includes the matrix of count data, the annotation matrix, and a matrix specifying both the library size and the normalization factor relative to each sample.
+<<DGElist7, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+colnames(genes)[1] <- "Symbol"
+genes <- genes[-2]
+dge <- DGEList(counts = counts, genes = genes, group = barcodes$SampleID)
+# Sum technical replicates
+dge$samples$Treat <- Targets$Treatment
+dge$samples$Split <- Targets$sampleGroup
+y <- sumTechReps(dge, ID = dge$samples$group)
+y
+# libsizes
+y$samples
+@
+\subsection{Filtering and Normalization}
+No sgRNA is filtered. Counts were normalized using TMM normalization.
+<<Filtering, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+A <- rowSums(y$counts)
+# Check if there is any sgRNA with 0 counts accross all the samples.
+nrow(y[!A > 0,])
+# Check if there is any gene without annotation.
+sum(is.na(y$genes$Symbol))
+y$samples$norm.factors <- calcNormFactors(y$counts + 0.2)
+y$samples$Treat <- factor(y$samples$Treat, levels = c("Reference", "Control", "MCL1"))
+y$samples
+@
+\subsection{Number of sgRNAs Per Gene}
+<<genes_sgRNA, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+genes_sgrna <- y$genes$Symbol
+length(unique(genes_sgrna))
+# There are 21697 genes 
+nsgrna <- table(genes_sgrna)
+head(nsgrna)
+write.xlsx(nsgrna, "tables/nsgrna.xlsx")
+pdf("figures/hist_sgrna.pdf", height = 4, width = 4)
+hist(nsgrna, xlab = "Number of sgRNA", ylim = c(0, 20000))
+dev.off()
+@
+
+\section{Linear Models}
+As we mentioned in the background section first aim of the experiment was to determine if there are novel regulators of resistance in the human HER2 enriched breast cancer cell line SKBR3 to a new MCL1-inhibitor. 
+To test this hypothesis we compared MCL-1 samples with reference and control samples separately.
+\subsection{MCL1 vs Reference (A23 to F23 vs A to F)}
+Before we fit the model, we construct the design matrix. 
+<<MCL1vsRef2, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+design <- model.matrix(~ Split + Treat, data = y$samples)
+design
+@
+<<MCL1vsRef3, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+y <- estimateGLMCommonDisp(y, design)
+fit <- glmFit(y, design)
+lrt <- glmLRT(fit, coef = 8)
+top <- topTags(lrt, n = Inf)
+toptable <- top$table
+head(toptable, 30)
+hits <- toptable[toptable$FDR <= 0.45, ]
+y.hits <- y$counts[rownames(hits),]
+write.xlsx(y.hits, "tables/countsMCL1.xlsx", sheetName = "MCL1vsReference_All")
+num.reps <- apply(y.hits,1,function(x)sum(x>0))
+top.hits <- data.frame(hits,num.reps)
+write.xlsx(top.hits, "tables/toptableMCL1.xlsx", sheetName = "MCL1vsReference_All")
+@
+This results support the hypothesis that there is no significant change in guide representation with passaging alone.
+<<session_info, echo=TRUE, prompt=TRUE, warning=FALSE, comment=NA, message=FALSE, size="footnotesize">>=
+sessionInfo()
+@
+\end{document}
+
